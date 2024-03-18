@@ -90,19 +90,37 @@ class LanguageModel(object):
 
         return { n_gram: smoothed_count(n_gram, count) for n_gram, count in n_vocab.items() }
     
-    def _good_turing_smoothing(self):
-        # 计算 n-gram 频率
+    def good_turing_smoothing(self):
         n_grams = nltk.ngrams(self.tokens, self.n)
         n_vocab = Counter(n_grams)
         
-        # 计算每个频率对应的计数
         counts = Counter(n_vocab.values())
         
         # 计算非零频率的平滑计数
-        smoothed_counts = {k: (k + 1) * counts[k + 1] / counts[k] if k + 1 in counts else k for k in n_vocab.values() if k != 0}
+        smoothed_counts = {k: (k + 1) * counts[k + 1] / counts[k] if k + 1 in counts else k for k in n_vocab.values()}
         
-        # 计算概率
         prob_smoothed = {n_gram: smoothed_counts[count] / len(self.tokens) for n_gram, count in n_vocab.items()}
+        
+        return prob_smoothed
+    
+    def _good_turing_smoothing(self):
+        # 统计不同出现次数的n-grams数量
+        ngrams_freq = Counter(nltk.ngrams(self.tokens, self.n))
+        counts = Counter(ngrams_freq.values())
+        
+        # Good-Turing平滑处理
+        smoothed_counts = {}
+        for count in ngrams_freq.values():
+            if count + 1 in counts:
+                smoothed_count = (count + 1) * counts[count + 1] / counts[count]
+            else:
+                # 当N_r为0时，假设一个很小的非零值，避免除以0
+                smoothed_count = count * 0.1
+            smoothed_counts[count] = smoothed_count
+        
+        # 计算平滑后的概率
+        total_count = sum(ngrams_freq.values())
+        prob_smoothed = {ngram: smoothed_counts[count] / total_count for ngram, count in ngrams_freq.items()}
         
         return prob_smoothed
 
@@ -168,13 +186,6 @@ class LanguageModel(object):
         known_ngrams  = (self._convert_oov(ngram) for ngram in test_ngrams)
         probabilities = [self.model[ngram] for ngram in known_ngrams]
 
-        return math.exp((-1/N) * sum(map(math.log, probabilities)))
-    
-    def _perplexity(self, test_data):
-        test_tokens = preprocess(test_data, self.n)
-        test_ngrams = nltk.ngrams(test_tokens, self.n)
-        N = len(test_tokens)
-        probabilities =[self.model[ngram] for ngram in test_ngrams if ngram in self.model]
         return math.exp((-1/N) * sum(map(math.log, probabilities)))
 
     def _best_candidate(self, prev, i, without=[]):
