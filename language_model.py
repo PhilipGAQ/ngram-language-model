@@ -5,7 +5,8 @@ from itertools import product
 import math
 import nltk
 from pathlib import Path
-
+import os
+from collections import Counter
 from preprocess import preprocess
 
 
@@ -23,13 +24,16 @@ def load_data(data_dir):
 
     """
     train_path = data_dir.joinpath('train.txt').absolute().as_posix()
-    test_path  = data_dir.joinpath('test.txt').absolute().as_posix()
+    test1_path  = data_dir.joinpath('test.1.txt').absolute().as_posix()
+    test2_path  = data_dir.joinpath('test.2.txt').absolute().as_posix()
 
-    with open(train_path, 'r') as f:
+    with open(train_path, 'r',encoding='utf-8') as f:
         train = [l.strip() for l in f.readlines()]
-    with open(test_path, 'r') as f:
-        test = [l.strip() for l in f.readlines()]
-    return train, test
+    with open(test1_path, 'r',encoding='utf-8') as f:
+        test1 = [l.strip() for l in f.readlines()]
+    with open(test2_path, 'r',encoding='utf-8') as f:
+        test2 = [l.strip() for l in f.readlines()]
+    return train, test1,test2
 
 
 class LanguageModel(object):
@@ -50,15 +54,17 @@ class LanguageModel(object):
 
     """
 
-    def __init__(self, train_data, n, laplace=1):
+    def __init__(self, train_data, n, laplace=1,good_turing=False):
         self.n = n
         self.laplace = laplace
         self.tokens = preprocess(train_data, n)
         self.vocab  = nltk.FreqDist(self.tokens)
+        self.good_turing = good_turing
         self.model  = self._create_model()
         self.masks  = list(reversed(list(product((0,1), repeat=n))))
 
-    def _smooth(self):
+
+    def _smooth_laplace(self):
         """Apply Laplace smoothing to n-gram frequency distribution.
         
         Here, n_grams refers to the n-grams of the tokens in the training corpus,
@@ -83,6 +89,23 @@ class LanguageModel(object):
             return (n_count + self.laplace) / (m_count + self.laplace * vocab_size)
 
         return { n_gram: smoothed_count(n_gram, count) for n_gram, count in n_vocab.items() }
+    
+    def _good_turing_smoothing(self):
+        # 计算 n-gram 频率
+        n_grams = nltk.ngrams(self.tokens, self.n)
+        n_vocab = Counter(n_grams)
+        
+        # 计算每个频率对应的计数
+        counts = Counter(n_vocab.values())
+        
+        # 计算非零频率的平滑计数
+        smoothed_counts = {k: (k + 1) * counts[k + 1] / counts[k] if k + 1 in counts else k for k in n_vocab.values() if k != 0}
+        
+        # 计算概率
+        prob_smoothed = {n_gram: smoothed_counts[count] / len(self.tokens) for n_gram, count in n_vocab.items()}
+        
+        return prob_smoothed
+
 
     def _create_model(self):
         """Create a probability distribution for the vocabulary of the training corpus.
@@ -100,7 +123,11 @@ class LanguageModel(object):
             num_tokens = len(self.tokens)
             return { (unigram,): count / num_tokens for unigram, count in self.vocab.items() }
         else:
-            return self._smooth()
+            if self.good_turing:
+                return self._good_turing_smoothing()
+            else:
+                return self._smooth_laplace()
+
 
     def _convert_oov(self, ngram):
         """Convert, if necessary, a given n-gram to one which is known by the model.
@@ -141,6 +168,13 @@ class LanguageModel(object):
         known_ngrams  = (self._convert_oov(ngram) for ngram in test_ngrams)
         probabilities = [self.model[ngram] for ngram in known_ngrams]
 
+        return math.exp((-1/N) * sum(map(math.log, probabilities)))
+    
+    def _perplexity(self, test_data):
+        test_tokens = preprocess(test_data, self.n)
+        test_ngrams = nltk.ngrams(test_tokens, self.n)
+        N = len(test_tokens)
+        probabilities =[self.model[ngram] for ngram in test_ngrams if ngram in self.model]
         return math.exp((-1/N) * sum(map(math.log, probabilities)))
 
     def _best_candidate(self, prev, i, without=[]):
@@ -204,25 +238,33 @@ if __name__ == '__main__':
             help='Location of the data directory containing train.txt and test.txt')
     parser.add_argument('--n', type=int, required=True,
             help='Order of N-gram model to create (i.e. 1 for unigram, 2 for bigram, etc.)')
-    parser.add_argument('--laplace', type=float, default=0.01,
-            help='Lambda parameter for Laplace smoothing (default is 0.01 -- use 1 for add-1 smoothing)')
+    parser.add_argument('--laplace', type=float, default=0.0,
+            help='Lambda parameter for Laplace smoothing (default is 0.00 -- use 1 for add-1 smoothing)')
+    parser.add_argument('--good_turing', type=bool, default=False,
+            help='Use Good-Turing smoothing instead of Laplace (default False)')
     parser.add_argument('--num', type=int, default=10,
             help='Number of sentences to generate (default 10)')
     args = parser.parse_args()
 
     # Load and prepare train/test data
     data_path = Path(args.data)
-    train, test = load_data(data_path)
+    train, test1, test2 = load_data(data_path)
 
     print("Loading {}-gram model...".format(args.n))
-    lm = LanguageModel(train, args.n, laplace=args.laplace)
+    lm = LanguageModel(train, args.n, laplace=args.laplace,good_turing=args.good_turing)
     print("Vocabulary size: {}".format(len(lm.vocab)))
 
     print("Generating sentences...")
     for sentence, prob in lm.generate_sentences(args.num):
         print("{} ({:.5f})".format(sentence, prob))
 
-    perplexity = lm.perplexity(test)
-    print("Model perplexity: {:.3f}".format(perplexity))
+    perplexity1 = lm.perplexity(test1)
+    perplexity2 = lm.perplexity(test2)
+    #perplexity1_notConvert = lm._perplexity(test1)
+    #perplexity2_notConvert = lm._perplexity(test2)
+    print("Model perplexity for test.1.txt: {:.3f}\n".format(perplexity1))
+    print("Model perplexity for test.2.txt: {:.3f}\n".format(perplexity2))
+    #print("Model perplexity_notConvert for test.1.txt: {:.3f}\n".format(perplexity1_notConvert))
+    #print("Model perplexity_notConvert for test.2.txt: {:.3f}\n".format(perplexity2_notConvert))
     print("")
 
