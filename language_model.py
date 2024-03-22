@@ -8,7 +8,9 @@ from pathlib import Path
 import os
 from collections import Counter
 from preprocess import preprocess
-
+import matplotlib.pyplot as plt
+from evalue import top_k_ngrams
+from smoothing import LaplacianSmoothing,GoodTuringSmoothing
 
 def load_data(data_dir):
     """Load train and test corpora from a directory.
@@ -54,17 +56,33 @@ class LanguageModel(object):
 
     """
 
-    def __init__(self, train_data, n, laplace=1,good_turing=False):
+    def __init__(self, train_data, n, laplace=1,good_turing=False,no_smoothing=False):
         self.n = n
         self.laplace = laplace
         self.tokens = preprocess(train_data, n)
         self.vocab  = nltk.FreqDist(self.tokens)
         self.good_turing = good_turing
+        self.no_smoothing = no_smoothing
         self.model  = self._create_model()
         self.masks  = list(reversed(list(product((0,1), repeat=n))))
 
 
+    def _no_smoothing(self):
+        print("no smoothing")
+        n_grams=nltk.ngrams(self.tokens,self.n)
+        n_vocab = nltk.FreqDist(n_grams)
+        # prob= 每一个ngram出现的次数 / 总的ngrams的数量
+        m_grams=nltk.ngrams(self.tokens,self.n-1)
+        m_vocab=nltk.FreqDist(m_grams)
+        prob={}
+
+        prob={n_gram : count/m_vocab[n_gram[:-1]] for n_gram, count in n_vocab.items()}
+       
+        return prob
+
+
     def _smooth_laplace(self):
+        print('laplace smoothing')
         """Apply Laplace smoothing to n-gram frequency distribution.
         
         Here, n_grams refers to the n-grams of the tokens in the training corpus,
@@ -78,7 +96,10 @@ class LanguageModel(object):
         vocab_size = len(self.vocab)
 
         n_grams = nltk.ngrams(self.tokens, self.n)
+        # print(n_grams.items()[10])
         n_vocab = nltk.FreqDist(n_grams)
+
+
 
         m_grams = nltk.ngrams(self.tokens, self.n-1)
         m_vocab = nltk.FreqDist(m_grams)
@@ -87,43 +108,48 @@ class LanguageModel(object):
             m_gram = n_gram[:-1]
             m_count = m_vocab[m_gram]
             return (n_count + self.laplace) / (m_count + self.laplace * vocab_size)
+        prob= { n_gram: smoothed_count(n_gram, count) for n_gram, count in n_vocab.items() }
 
-        return { n_gram: smoothed_count(n_gram, count) for n_gram, count in n_vocab.items() }
-    
-    def good_turing_smoothing(self):
-        n_grams = nltk.ngrams(self.tokens, self.n)
-        n_vocab = Counter(n_grams)
         
-        counts = Counter(n_vocab.values())
-        
-        # 计算非零频率的平滑计数
-        smoothed_counts = {k: (k + 1) * counts[k + 1] / counts[k] if k + 1 in counts else k for k in n_vocab.values()}
-        
-        prob_smoothed = {n_gram: smoothed_counts[count] / len(self.tokens) for n_gram, count in n_vocab.items()}
-        
-        return prob_smoothed
-    
+        return prob
+
     def _good_turing_smoothing(self):
         # 统计不同出现次数的n-grams数量
         ngrams_freq = Counter(nltk.ngrams(self.tokens, self.n))
         counts = Counter(ngrams_freq.values())
         
-        # Good-Turing平滑处理
+        mgram_freq=Counter(nltk.ngrams(self.tokens,self.n-1))
+        mcounts=Counter(mgram_freq.values())
+
         smoothed_counts = {}
         for count in ngrams_freq.values():
             if count + 1 in counts:
                 smoothed_count = (count + 1) * counts[count + 1] / counts[count]
             else:
-                # 当N_r为0时，假设一个很小的非零值，避免除以0
-                smoothed_count = count * 0.1
+                smoothed_count = count
             smoothed_counts[count] = smoothed_count
-        
-        # 计算平滑后的概率
-        total_count = sum(ngrams_freq.values())
-        prob_smoothed = {ngram: smoothed_counts[count] / total_count for ngram, count in ngrams_freq.items()}
-        
-        return prob_smoothed
 
+        m_smoothed_counts={}
+        for mcount in mgram_freq.values():
+            if mcount+1 in mcounts:
+                m_smoothed_count=(mcount+1)*mcounts[mcount+1]/mcounts[mcount]
+            else:
+                m_smoothed_count=mcount
+            m_smoothed_counts[mcount]=m_smoothed_count
+        # list=[smoothed_counts[count] / m_smoothed_counts[mgram_freq[ngram[:-1]]] for ngram, count in ngrams_freq.items()]
+        # total=sum(list)
+        prob_smoothed={}
+        for ngram, count in ngrams_freq.items():
+            if smoothed_counts[count] / (m_smoothed_counts[mgram_freq[ngram[:-1]]]) >1:
+                prob_smoothed[ngram]=1
+            else:
+                prob_smoothed[ngram]=smoothed_counts[count] / (m_smoothed_counts[mgram_freq[ngram[:-1]]]) 
+        smoothedsum=0
+        for ngram,cnt in ngrams_freq.items():
+            smoothedsum+=smoothed_counts[cnt]
+        prob_smoothed['<zero>']=counts[1]/len(self.vocab) #(len(self.tokens)-smoothedsum)/len(self.tokens)
+        # print(prob_smoothed['<zero>'])
+        return prob_smoothed
 
     def _create_model(self):
         """Create a probability distribution for the vocabulary of the training corpus.
@@ -143,9 +169,10 @@ class LanguageModel(object):
         else:
             if self.good_turing:
                 return self._good_turing_smoothing()
-            else:
+            elif self.no_smoothing:
+                return self._no_smoothing()
+            else:    
                 return self._smooth_laplace()
-
 
     def _convert_oov(self, ngram):
         """Convert, if necessary, a given n-gram to one which is known by the model.
@@ -182,11 +209,33 @@ class LanguageModel(object):
         test_tokens = preprocess(test_data, self.n)
         test_ngrams = nltk.ngrams(test_tokens, self.n)
         N = len(test_tokens)
+        prob=[]
+        # mgram_freq=nltk.FreqDist(nltk.ngrams(self.tokens,self.n-1))
+        test_ngrams=list(test_ngrams)
+        temp=0
+        for ngram in test_ngrams:
+            if ngram not in self.model.keys():
+                temp+=1
+        # print(temp)
+        if self.good_turing:
+            none_seen_prob=self.model['<zero>']/temp
+        print(temp)
+        for ngram in test_ngrams:
+            if ngram in self.model.keys():
+                prob.append(self.model[ngram])
+            elif self.good_turing:
+                prob.append(none_seen_prob)
+            elif self.laplace:
+                prob.append(1/len(self.vocab.keys()))
+            else:
+                continue
+                #if temp>10: return False
+        # if temp>1 : return False
+        
+        # known_ngrams  = (self._convert_oov(ngram) for ngram in test_ngrams)
+        # probabilities = [self.model[ngram] for ngram in known_ngrams]
 
-        known_ngrams  = (self._convert_oov(ngram) for ngram in test_ngrams)
-        probabilities = [self.model[ngram] for ngram in known_ngrams]
-
-        return math.exp((-1/N) * sum(map(math.log, probabilities)))
+        return math.exp((-1/N) * sum(map(math.log, prob)))
 
     def _best_candidate(self, prev, i, without=[]):
         """Choose the most likely next token given the previous (n-1) tokens.
@@ -242,6 +291,9 @@ class LanguageModel(object):
 
             yield ' '.join(sent), -1/math.log(prob)
        
+       
+
+    
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("N-gram Language Model")
@@ -255,27 +307,32 @@ if __name__ == '__main__':
             help='Use Good-Turing smoothing instead of Laplace (default False)')
     parser.add_argument('--num', type=int, default=10,
             help='Number of sentences to generate (default 10)')
+    parser.add_argument('--no_smoothing',type=bool,default=False,
+            help='no smoothing')
     args = parser.parse_args()
 
     # Load and prepare train/test data
     data_path = Path(args.data)
     train, test1, test2 = load_data(data_path)
-
-    print("Loading {}-gram model...".format(args.n))
-    lm = LanguageModel(train, args.n, laplace=args.laplace,good_turing=args.good_turing)
+    print("choose {}-gram models".format(args.n))
+    lm = LanguageModel(train, args.n, laplace=args.laplace,good_turing=args.good_turing,no_smoothing=args.no_smoothing)
     print("Vocabulary size: {}".format(len(lm.vocab)))
 
     print("Generating sentences...")
     for sentence, prob in lm.generate_sentences(args.num):
         print("{} ({:.5f})".format(sentence, prob))
-
+    
+    # plot_dict_values(lm.model)
     perplexity1 = lm.perplexity(test1)
     perplexity2 = lm.perplexity(test2)
-    #perplexity1_notConvert = lm._perplexity(test1)
-    #perplexity2_notConvert = lm._perplexity(test2)
-    print("Model perplexity for test.1.txt: {:.3f}\n".format(perplexity1))
-    print("Model perplexity for test.2.txt: {:.3f}\n".format(perplexity2))
-    #print("Model perplexity_notConvert for test.1.txt: {:.3f}\n".format(perplexity1_notConvert))
-    #print("Model perplexity_notConvert for test.2.txt: {:.3f}\n".format(perplexity2_notConvert))
-    print("")
-
+    if perplexity1:
+        print("Model perplexity for test.1.txt: {:.3f}".format(perplexity1))
+    else:
+        print("error")
+    if perplexity2:
+        print("Model perplexity for test.2.txt: {:.3f}".format(perplexity2))
+    else:
+        print("error")
+    
+    # print("Model perplexity for test.1.txt: False")
+    # print("Model perplexity for test.2.txt: {:.3f}".format(perplexity2))

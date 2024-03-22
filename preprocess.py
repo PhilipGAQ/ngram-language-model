@@ -45,7 +45,8 @@ def preprocess(sentences, n):
     """
     sentences = add_sentence_tokens(sentences, n)
     tokens = ' '.join(sentences).split(' ')
-    tokens = replace_singletons(tokens)
+    # tokens = replace_singletons(tokens)
+    # print(tokens[15])
     return tokens
 
 

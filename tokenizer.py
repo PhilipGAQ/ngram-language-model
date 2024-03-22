@@ -9,9 +9,9 @@ def rmv_pct(train_path,path1,path2):
         test1 = [l.strip() for l in f.readlines()]
     with open(path2,'r',encoding='utf-8') as f:
         test2=[l.strip() for l in f.readlines()]
-    train = [i.replace('.','').replace(',','').replace('!','').replace('?','').replace('。','').replace('！','').replace('？','').replace('，','').replace('《','').replace('》','').replace('、','').replace('：','').replace('（','').replace('）','').replace('“','').replace('”','') for i in train]
-    test1 = [i.replace('.','').replace(',','').replace('!','').replace('?','').replace('。','').replace('！','').replace('？','').replace('，','').replace('《','').replace('》','').replace('、','').replace('：','').replace('（','').replace('）','').replace('“','').replace('”','') for i in test1]
-    test2 = [i.replace('.','').replace(',','').replace('!','').replace('?','').replace('。','').replace('！','').replace('？','').replace('，','').replace('《','').replace('》','').replace('、','').replace('：','').replace('（','').replace('）','').replace('“','').replace('”','') for i in test2]
+    train = [i.replace('.','').replace(',','').replace('!','').replace('?','').replace('。','').replace('！','').replace('？','').replace('，','').replace('《','').replace('》','').replace('、','').replace('：','').replace('（','').replace('）','').replace('“','').replace('”','').replace('—','') for i in train]
+    test1 = [i.replace('.','').replace(',','').replace('!','').replace('?','').replace('。','').replace('！','').replace('？','').replace('，','').replace('《','').replace('》','').replace('、','').replace('：','').replace('（','').replace('）','').replace('“','').replace('”','').replace('—','') for i in test1]
+    test2 = [i.replace('.','').replace(',','').replace('!','').replace('?','').replace('。','').replace('！','').replace('？','').replace('，','').replace('《','').replace('》','').replace('、','').replace('：','').replace('（','').replace('）','').replace('“','').replace('”','').replace('—','') for i in test2]
     # create new files called data_new/train.txt
     if  not os.path.exists('data_new'):
         os.mkdir('data_new')
